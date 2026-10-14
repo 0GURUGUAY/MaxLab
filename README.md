@@ -21,7 +21,7 @@ Le backend Express vérifie les ID tokens Google, cloisonne les fiches et le pro
 
 Pour un environnement local, créer `.env` à partir de `.env.example`, puis utiliser les identifiants ADC de Google Cloud (`gcloud auth application-default login`) ; ne jamais télécharger de clé JSON de compte de service. La commande `npm run dev` démarre le backend local, vérifie son endpoint de santé, puis lance Vite, qui relaie `/api` sur `localhost:8080`. Pour lancer uniquement le backend, utiliser `npm run dev:server`. Avant le démarrage local, définir dans `.env` les variables du projet, du bucket, du client OAuth et `ALLOWED_ORIGINS=http://localhost:5173`. Dans la console Google Cloud, ajouter `http://localhost` et `http://localhost:5173` aux origines JavaScript autorisées du client OAuth Web utilisé par `VITE_GOOGLE_CLIENT_ID`, faute de quoi le bouton Google renvoie une erreur 403 « origin is not allowed ».
 
-Le backend Cloud Run est accessible. Sur Android, la connexion native utilise le client OAuth Web pour obtenir un ID token ; la console Google Cloud doit aussi contenir un client OAuth Android associé à `com.maxpatissier.maxlab` et à l'empreinte SHA-1 du certificat de signature utilisé. Le backend doit autoriser l'origine Capacitor Android `https://localhost` dans `ALLOWED_ORIGINS`. Les appels Gemini du client utilisent la clé API configurée dans le profil.
+Le backend et l'application web sont déployés sur Cloud Run dans le projet `maxlab-511422`, région `us-central1` (service `maxlab`). Sur Android, la connexion native utilise le client OAuth Web pour obtenir un ID token ; la console Google Cloud doit aussi contenir un client OAuth Android associé à `com.maxpatissier.maxlab` et à l'empreinte SHA-1 du certificat de signature utilisé. Le backend doit autoriser l'origine Capacitor Android `https://localhost` dans `ALLOWED_ORIGINS`. Les appels Gemini du client utilisent la clé API configurée dans le profil.
 
 ## Modèle Gemini
 
@@ -43,10 +43,10 @@ npm run cap:sync
 npm run cap:open:android
 ```
 
-## Architecture cloud prévue
+## Architecture cloud
 
-Le client mobile et le web utiliseront le même compte Google et le même backend, sur le modèle de `VSC_AnalogSynth` : Express/Cloud Run, Firestore Native pour les métadonnées et Cloud Storage privé pour les originaux et les croquis. Les médias ne seront pas placés en base64 dans les documents Firestore ; les clés Gemini resteront uniquement côté serveur.
+Le client mobile et le web utilisent le même compte Google et le même backend : Express sur Cloud Run, Firestore Native pour les métadonnées et Cloud Storage privé pour les originaux et les croquis. Les médias ne sont pas placés en base64 dans les documents Firestore.
 
-Le projet Google Cloud, Firestore, le bucket privé, le compte de service et le client OAuth Web sont configurés. Reste à déployer le backend sur Cloud Run, ajouter l'origine du domaine Cloud Run au client OAuth et à la liste CORS, puis créer le client OAuth Android. Ne placez aucune clé secrète dans le client ou l'APK.
+Le service Cloud Run `maxlab` est déployé et son endpoint de santé a été vérifié. La connexion OAuth et la synchronisation doivent être validées avec le compte de test sur les domaines de déploiement. Le client OAuth Android reste à créer. Ne placez aucune clé secrète dans le client ou l'APK.
 
 Voir [PROJECT_MaxLab.md](./PROJECT_MaxLab.md) pour le périmètre fonctionnel et le schéma de données.

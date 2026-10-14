@@ -1,6 +1,6 @@
 # MaxLab — Project Architecture
 
-## Architecture cible
+## Architecture
 
 Le client est prévu en React/Vite pour le web et Capacitor pour Android, sur le modèle de `VSC_AnalogSynth`. Le backend cible est Express sur Cloud Run, avec Google Sign-In vérifié côté serveur, Firestore Native pour les métadonnées et Cloud Storage privé pour les fichiers. À terme, la clé Gemini devra rester côté serveur et les appels IA passer par l'API. Dans le prototype actuel, la clé personnelle est synchronisée dans le profil Firestore du compte puis utilisée côté client pour les appels Gemini.
 
@@ -23,11 +23,11 @@ Les médias seront placés sous un chemin propre au compte et au produit dans Cl
 
 - Interface web responsive, catégories bois/cuir/tissu/photos, recherche, état des créations, fiche technique et journal chronologique.
 - Ajout local de photos, de fichiers et de notes ; dictée vocale via les fonctions du navigateur.
-- Photos/croquis d'exemple issus du répertoire fourni.
+- Photos/croquis d'exemple disponibles localement dans `photo/` (images personnelles exclues de GitHub).
 - Backend préparé : Express vérifie le jeton Google, stocke les fiches isolées par compte dans Firestore et les médias privés dans Cloud Storage.
 - Le client web propose une synchronisation manuelle, fusionne les fiches par date de modification, propage les suppressions locales et signale les conflits.
-- Reste à déployer la première révision Cloud Run, ajouter son URL aux origines OAuth/CORS et vérifier la synchronisation avec le compte test. La génération Gemini reste à développer.
-- Le dossier de travail n'est pas encore relié à GitHub. Le dépôt visé est `0GURUGU/MaxLab`.
+- Le service Cloud Run `maxlab` est déployé dans `us-central1` ; l'endpoint de santé répond correctement. La connexion OAuth et la synchronisation restent à valider avec le compte de test. La génération Gemini reste à développer.
+- Le code est publié sur GitHub : `0GURUGU/MaxLab`.
 
 La connexion native Android (client OAuth Android et empreinte SHA-1 de signature) reste à configurer. Pour activer les croquis Gemini, la clé API sera configurée côté serveur/Secret Manager ; elle ne doit jamais être intégrée à l'application.
 
