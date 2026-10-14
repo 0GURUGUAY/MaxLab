@@ -1,0 +1,14 @@
+node_modules/
+dist/
+server-dist/
+backup/*.zip
+.env
+.env.*
+!.env.example
+ios/
+.DS_Store
+photo/
+android/.gradle/
+android/**/build/
+android/local.properties
+android/app/src/main/assets/public/

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MaxLab</string>
+    <string name="title_activity_main">MaxLab</string>
+    <string name="package_name">com.maxpatissier.maxlab</string>
+    <string name="custom_url_scheme">com.maxpatissier.maxlab</string>
+</resources>

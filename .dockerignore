@@ -1,0 +1,9 @@
+node_modules
+dist
+server-dist
+android
+photo
+.env
+.env.*
+!.env.example
+.git
