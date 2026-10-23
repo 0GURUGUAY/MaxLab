@@ -59,6 +59,23 @@ export function makeId(): string {
   return crypto.randomUUID();
 }
 
+export function mergeProductVersions(local: Product, remote: Product): Product {
+  const preferred = Date.parse(local.updatedAt) > Date.parse(remote.updatedAt) ? local : remote;
+  const secondary = preferred === local ? remote : local;
+  const entries = [...preferred.entries];
+  const entryIds = new Set(entries.map((entry) => entry.id));
+
+  for (const entry of secondary.entries) {
+    if (entryIds.has(entry.id)) continue;
+    entryIds.add(entry.id);
+    const createdAt = Date.parse(entry.createdAt);
+    const insertionIndex = entries.findIndex((existing) => Date.parse(existing.createdAt) < createdAt);
+    entries.splice(insertionIndex < 0 ? entries.length : insertionIndex, 0, entry);
+  }
+
+  return { ...preferred, entries };
+}
+
 export function createProduct(input: Pick<Product, "name" | "category"> & Partial<Product>, now = new Date()): Product {
   const timestamp = now.toISOString();
   return {

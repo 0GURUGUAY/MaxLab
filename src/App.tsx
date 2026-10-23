@@ -23,19 +23,16 @@ import {
   Search,
   Settings2,
   Sparkles,
-  Trash2,
   X,
 } from "lucide-react";
 import { GoogleLogin } from "@react-oauth/google";
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
-import { SpeechRecognition } from "@capgo/capacitor-speech-recognition";
-import { addEntry, categoryLabels, collectEquipmentOptions, createProduct, EntryWorkDetails, formatDate, formatDurationMinutes, insertEntry, isStarterProduct, moveEntry, removeEntry as removeCatalogEntry, statusLabels, summarizeEntryWork, updateNoteEntry } from "./catalog";
-import { clearCloudToken, loadCloudToken, saveCloudToken } from "./authStorage";
-import { clearDeletedProductId, clearPendingSync, deleteMedia, hasStoredProducts, loadDeletedProductIds, loadPendingSyncTags, loadProducts, markPendingSync, markProductDeleted, readMedia, saveProducts, storeMedia, stripMediaPaths } from "./storage";
-import { BROWSER_SESSION_TOKEN, clearCloudSession, CloudRequestError, createCloudSession, deleteCloudMedia, deleteCloudProduct, fetchCloudMedia, getCloudProfile, listCloudProducts, putCloudMedia, verifyCloudSession, writeCloudProduct, writeCloudProfile, GOOGLE_CLIENT_ID } from "./cloud";
+import { addEntry, categoryLabels, collectEquipmentOptions, createProduct, EntryWorkDetails, formatDate, formatDurationMinutes, insertEntry, isStarterProduct, mergeProductVersions, moveEntry, statusLabels, summarizeEntryWork, updateNoteEntry } from "./catalog";
+import { clearDeletedProductId, clearPendingSync, deleteMedia, hasStoredProducts, loadDeletedProductIds, loadPendingSyncTags, loadProducts, markPendingSync, markProductDeleted, readMedia, saveProducts, storeMedia } from "./storage";
+import { deleteCloudProduct, fetchCloudMedia, listCloudProducts, putCloudMedia, verifyCloudSession, writeCloudProduct, GOOGLE_CLIENT_ID } from "./cloud";
 import { compressPhoto } from "./image";
-import { clearProfilePendingSync, hasProfilePendingSync, isDefaultProfileSettings, loadProfileSettings, markProfilePendingSync, saveProfileSettings } from "./profile";
+import { loadProfileSettings } from "./profile";
 import type { ProfileSettings } from "./profile";
 import { ProfileModal } from "./ProfileModal";
 import { AiStudioModal } from "./AiStudioModal";
@@ -59,7 +56,6 @@ type WindowWithSpeech = Window & {
   SpeechRecognition?: SpeechRecognitionConstructor;
   webkitSpeechRecognition?: SpeechRecognitionConstructor;
 };
-type SpeechRecognitionListener = { remove: () => Promise<void> };
 
 function GoogleIcon({ size = 16 }: { size?: number }) {
   return (
@@ -149,7 +145,6 @@ function LoginScreen({
 const categoryFilters: Array<ProductCategory | "all"> = ["all", "bois", "cuir", "tissu", "photos"];
 const productCategories: ProductCategory[] = ["bois", "cuir", "tissu", "photos"];
 const blankForm = { name: "", category: "bois" as ProductCategory, subcategory: "", materials: "", dimensions: "" };
-const supportedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 function ProductImage({
   entry,
@@ -168,9 +163,9 @@ function ProductImage({
 
   useEffect(() => {
     const mediaId = entry.mediaId;
-    if (!mediaId) {
-      setUrl("");
-      setLoadError("Image indisponible : média manquant.");
+    if (entry.mediaPath || !mediaId) {
+      setUrl(entry.mediaPath ?? "");
+      setLoadError("");
       return;
     }
     let objectUrl = "";
@@ -191,13 +186,6 @@ function ProductImage({
         if (!blob) {
           setLoadError("Photo indisponible sur cet appareil.");
           return;
-        }
-        if (isImageEntry(entry) && !supportedImageTypes.has(blob.type)) {
-          const sourceMimeType = entry.mimeType?.startsWith("image/") ? entry.mimeType : blob.type;
-          if (sourceMimeType.startsWith("image/")) {
-            blob = await compressPhoto(new File([blob], entry.fileName || "photo", { type: sourceMimeType }));
-            await storeMedia(mediaId, blob);
-          }
         }
         objectUrl = URL.createObjectURL(blob);
         setUrl(objectUrl);
@@ -224,21 +212,16 @@ function ProductImage({
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [cloudToken, entry.mediaId, productId]);
+  }, [cloudToken, entry.mediaId, entry.mediaPath, productId]);
 
   return url
     ? <img ref={(element) => { imageRef.current = element; }} className={className} src={url} alt={entry.text || "Photo du projet"} loading="lazy" decoding="async" />
     : <div ref={imageRef} className={`${className} media-placeholder`} role={loadError ? "status" : undefined} title={loadError || undefined}><ImagePlus size={22} />{loadError && <span>{loadError}</span>}</div>;
 }
 
-function isImageEntry(entry: WorkshopEntry): boolean {
-  return entry.kind === "photo" || entry.kind === "sketch"
-    || (entry.kind === "file" && entry.mimeType?.startsWith("image/") === true);
-}
-
 function ProductCard({ product, cloudToken, pendingSync, onOpen }: { product: Product; cloudToken: string; pendingSync: boolean; onOpen: () => void }) {
-  const cover = product.entries.find(isImageEntry);
-  const photos = product.entries.filter(isImageEntry).length;
+  const cover = product.entries.find((entry) => entry.kind === "photo" || entry.kind === "sketch");
+  const photos = product.entries.filter((entry) => entry.kind === "photo" || entry.kind === "sketch").length;
   return (
     <button className="product-card" onClick={onOpen}>
       <div className="product-cover">
@@ -391,7 +374,6 @@ function ProductDetails({
   onEntry,
   onEditEntry,
   onMoveEntry,
-  onDeleteEntry,
   onUpload,
   onDelete,
   onOpenAiStudio,
@@ -405,7 +387,6 @@ function ProductDetails({
   onEntry: (text: string, workDetails: EntryWorkDetails, index?: number) => void;
   onEditEntry: (entryId: string, text: string, workDetails: EntryWorkDetails) => void;
   onMoveEntry: (fromIndex: number, toIndex: number) => void;
-  onDeleteEntry: (entry: WorkshopEntry) => Promise<void>;
   onUpload: (file: File, kind: "photo" | "file", index?: number) => Promise<void>;
   onDelete: () => void;
   onOpenAiStudio: (tab: "sketch" | "sheets" | "ideas") => void;
@@ -425,9 +406,7 @@ function ProductDetails({
   const fileRef = useRef<HTMLInputElement>(null);
   const insertAtRef = useRef<number | null>(null);
   const speechRef = useRef<SpeechRecognitionLike | null>(null);
-  const nativeSpeechListenersRef = useRef<SpeechRecognitionListener[]>([]);
-  const nativeSpeechBaseDraftRef = useRef("");
-  const imageEntries = product.entries.filter(isImageEntry);
+  const imageEntries = product.entries.filter((entry) => entry.kind === "photo" || entry.kind === "sketch");
   const workSummary = summarizeEntryWork(product.entries);
 
   function addNote(event: React.FormEvent<HTMLFormElement>) {
@@ -438,60 +417,18 @@ function ProductDetails({
     setDraftWork(blankNoteWorkDraft);
   }
 
-  async function toggleDictation() {
+  function toggleDictation() {
     if (recording) {
-      if (Capacitor.isNativePlatform()) {
-        await SpeechRecognition.stop();
-        setRecording(false);
-        await Promise.all(nativeSpeechListenersRef.current.map((listener) => listener.remove()));
-        nativeSpeechListenersRef.current = [];
-        return;
-      }
       speechRef.current?.stop();
       setRecording(false);
       return;
     }
-    if (Capacitor.isNativePlatform()) {
-      try {
-        const permissions = await SpeechRecognition.requestPermissions();
-        if (permissions.speechRecognition !== "granted") {
-          setNotice("Autorisez l'accès au microphone dans les paramètres Android pour utiliser la dictée.");
-          return;
-        }
-        const { available } = await SpeechRecognition.available();
-        if (!available) {
-          setNotice("La reconnaissance vocale n'est pas disponible sur cet appareil.");
-          return;
-        }
-        nativeSpeechBaseDraftRef.current = draft.trim();
-        const partialListener = await SpeechRecognition.addListener("partialResults", (event) => {
-          const text = event.accumulatedText ?? event.accumulated ?? event.matches?.[0] ?? "";
-          if (!text) return;
-          const base = nativeSpeechBaseDraftRef.current;
-          setDraft(`${base}${base ? " " : ""}${text}`.trim());
-        });
-        nativeSpeechListenersRef.current = [partialListener];
-        const stateListener = await SpeechRecognition.addListener("listeningState", (event) => {
-          if (event.state === "stopped") setRecording(false);
-        });
-        nativeSpeechListenersRef.current.push(stateListener);
-        await SpeechRecognition.start({ language: "fr-FR", maxResults: 1, partialResults: true });
-        setRecording(true);
-        setNotice("");
-      } catch (error) {
-        setRecording(false);
-        await Promise.all(nativeSpeechListenersRef.current.map((listener) => listener.remove()));
-        nativeSpeechListenersRef.current = [];
-        setNotice(error instanceof Error ? error.message : "La dictée n'a pas pu démarrer. Vérifiez l'autorisation du microphone.");
-      }
-      return;
-    }
-    const BrowserSpeechRecognition = (window as WindowWithSpeech).SpeechRecognition ?? (window as WindowWithSpeech).webkitSpeechRecognition;
-    if (!BrowserSpeechRecognition) {
+    const SpeechRecognition = (window as WindowWithSpeech).SpeechRecognition ?? (window as WindowWithSpeech).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
       setNotice("La dictée n'est pas prise en charge par ce navigateur. Vous pouvez saisir votre note au clavier.");
       return;
     }
-    const recognition = new BrowserSpeechRecognition();
+    const recognition = new SpeechRecognition();
     recognition.onresult = (event) => {
       const text = Array.from({ length: event.results.length }, (_, index) => event.results[index][0].transcript).join(" ");
       setDraft((current) => `${current}${current ? " " : ""}${text}`.trim());
@@ -554,17 +491,6 @@ function ProductDetails({
     setEditWork(blankNoteWorkDraft);
   }
 
-  async function deleteJournalEntry(entry: WorkshopEntry) {
-    const itemName = entry.kind === "note" ? "cette note" : "cette image";
-    if (!window.confirm(`Supprimer ${itemName} du journal ?`)) return;
-    try {
-      await onDeleteEntry(entry);
-      setNotice(entry.kind === "note" ? "Note supprimée du journal." : "Image supprimée du journal.");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Impossible de supprimer complètement cet élément.");
-    }
-  }
-
   function openPhotoPickerAt(index: number) {
     insertAtRef.current = index;
     galleryRef.current?.click();
@@ -574,7 +500,7 @@ function ProductDetails({
     <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="detail-drawer" role="dialog" aria-modal="true" aria-label={`Détails de ${product.name}`}>
         <header className="drawer-header">
-          <button className="back-button" onClick={onClose} aria-label="Retour au carnet"><ArrowLeft size={19} /><span>Carnet</span></button>
+          <button className="back-button" onClick={onClose} aria-label="Fermer les détails"><ArrowLeft size={19} /><span>Atelier</span></button>
           <span className="local-status"><i />Enregistré sur cet appareil</span>
           <button className="icon-button" onClick={onDelete} aria-label="Supprimer ce projet"><MoreHorizontal size={21} /></button>
         </header>
@@ -644,9 +570,6 @@ function ProductDetails({
                               <button type="button" className="timeline-move-button" onClick={() => onMoveEntry(index, index - 1)} disabled={index === 0 || insertPosition !== null} aria-label="Déplacer vers le haut" title="Déplacer vers le haut"><ChevronUp size={13} /></button>
                               <button type="button" className="timeline-move-button" onClick={() => onMoveEntry(index, index + 1)} disabled={index === product.entries.length - 1 || insertPosition !== null} aria-label="Déplacer vers le bas" title="Déplacer vers le bas"><ChevronDown size={13} /></button>
                             </span>
-                            {(entry.kind === "note" || isImageEntry(entry)) && (
-                              <button type="button" className="timeline-delete-button" onClick={() => void deleteJournalEntry(entry)} aria-label={entry.kind === "note" ? "Supprimer cette note" : "Supprimer cette image"} title={entry.kind === "note" ? "Supprimer cette note" : "Supprimer cette image"}><Trash2 size={13} /></button>
-                            )}
                             {entry.kind === "note" && (
                               <button type="button" className="timeline-edit-button" onClick={() => {
                                 setEditingNoteId(entry.id);
@@ -671,7 +594,7 @@ function ProductDetails({
                           </form>
                         ) : (
                           <>
-                            {entry.text && <p>{entry.text}</p>}
+                            {entry.text && <p className={entry.kind === "note" ? "timeline-note-text" : undefined}>{entry.text}</p>}
                             {entry.kind === "note" && entry.durationMinutes && entry.workMethod && (
                               <p className="note-work-summary">
                                 <Clock3 size={12} /> {formatDurationMinutes(entry.durationMinutes)} · {entry.workMethod === "manual" ? "manuel" : `machine${entry.machineName ? ` : ${entry.machineName}` : ""}`}
@@ -681,7 +604,7 @@ function ProductDetails({
                           </>
                         )}
                         {entry.kind === "file" && <span className="file-chip"><FilePlus2 size={13} />{entry.fileName}</span>}
-                        {isImageEntry(entry) && <ProductImage entry={entry} productId={product.id} cloudToken={cloudToken} className="timeline-photo" />}
+                        {(entry.kind === "photo" || entry.kind === "sketch") && <ProductImage entry={entry} productId={product.id} cloudToken={cloudToken} className="timeline-photo" />}
                       </div>
                     </article>
                     {index < product.entries.length - 1 && (
@@ -762,7 +685,6 @@ export function App() {
   const [cloudNotice, setCloudNotice] = useState("");
   const [cloudNoticeError, setCloudNoticeError] = useState(false);
   const nativeGoogleReady = useRef(false);
-  const sessionRestoreStarted = useRef(false);
 
   // État du profil, logo, API Gemini et pied de page
   const [profile, setProfile] = useState<ProfileSettings>(() => loadProfileSettings());
@@ -777,6 +699,44 @@ export function App() {
     result: DataSheetsResult;
     coverUrl?: string;
   } | null>(null);
+  const nativeBackHandler = useRef<() => void>(() => {});
+  nativeBackHandler.current = () => {
+    if (docModal) {
+      setDocModal(null);
+    } else if (aiStudioOpen) {
+      setAiStudioOpen(false);
+    } else if (profileOpen) {
+      setProfileOpen(false);
+    } else if (createOpen) {
+      setCreateOpen(false);
+    } else if (selectedId) {
+      setSelectedId("");
+    } else {
+      void CapacitorApp.exitApp();
+    }
+  };
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let active = true;
+    let removeListener: (() => Promise<void>) | undefined;
+    void CapacitorApp.addListener("backButton", () => nativeBackHandler.current())
+      .then((listener) => {
+        if (!active) {
+          void listener.remove();
+          return;
+        }
+        removeListener = () => listener.remove();
+      })
+      .catch((error: unknown) => {
+        setCloudNotice(error instanceof Error ? error.message : "Impossible d'activer le bouton Retour.");
+        setCloudNoticeError(true);
+      });
+    return () => {
+      active = false;
+      if (removeListener) void removeListener();
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -816,44 +776,6 @@ export function App() {
     }
   }, [products, productsLoaded]);
 
-  useEffect(() => {
-    if (!productsLoaded || sessionRestoreStarted.current) return;
-    sessionRestoreStarted.current = true;
-    if (Capacitor.isNativePlatform()) {
-      try {
-        const token = loadCloudToken();
-        if (token) void synchronize(token, products, true);
-      } catch (error) {
-        setCloudNotice(error instanceof Error ? error.message : "Impossible de restaurer la connexion Google.");
-        setCloudNoticeError(true);
-      }
-      return;
-    }
-    void synchronize(BROWSER_SESSION_TOKEN, products, true);
-  }, [products, productsLoaded]);
-
-  useEffect(() => {
-    if (!Capacitor.isNativePlatform()) return;
-    let removeListener: (() => Promise<void>) | undefined;
-    let disposed = false;
-    void CapacitorApp.addListener("backButton", ({ canGoBack }) => {
-      if (docModal) setDocModal(null);
-      else if (aiStudioOpen) setAiStudioOpen(false);
-      else if (profileOpen) setProfileOpen(false);
-      else if (createOpen) setCreateOpen(false);
-      else if (selectedId) setSelectedId("");
-      else if (canGoBack) window.history.back();
-      else void CapacitorApp.exitApp();
-    }).then((listener) => {
-      if (disposed) void listener.remove();
-      else removeListener = () => listener.remove();
-    });
-    return () => {
-      disposed = true;
-      if (removeListener) void removeListener();
-    };
-  }, [aiStudioOpen, createOpen, docModal, profileOpen, selectedId]);
-
   const selected = products.find((product) => product.id === selectedId);
   const equipmentOptions = useMemo(() => collectEquipmentOptions(products), [products]);
   const pendingSyncSet = useMemo(() => new Set(pendingSyncIds), [pendingSyncIds]);
@@ -873,7 +795,7 @@ export function App() {
     return matchesCategory && matchesSearch;
   }).sort((first, second) => Date.parse(second.updatedAt) - Date.parse(first.updatedAt)), [activeCategory, products, search]);
   const activeCount = products.filter((product) => product.status === "in-progress").length;
-  const photoCount = products.reduce((count, product) => count + product.entries.filter(isImageEntry).length, 0);
+  const photoCount = products.reduce((count, product) => count + product.entries.filter((entry) => entry.kind === "photo" || entry.kind === "sketch").length, 0);
 
   function markProductsForSync(ids: string[]) {
     if (!ids.length) return;
@@ -885,40 +807,16 @@ export function App() {
     }
   }
 
-  async function synchronizeProfile(token: string) {
-    const localProfile = loadProfileSettings();
-    if (hasProfilePendingSync()) {
-      await writeCloudProfile(token, localProfile);
-      clearProfilePendingSync();
-      return;
-    }
-    const remoteProfile = await getCloudProfile(token);
-    if (remoteProfile) {
-      if (isDefaultProfileSettings(remoteProfile) && !isDefaultProfileSettings(localProfile)) {
-        await writeCloudProfile(token, localProfile);
-        return;
-      }
-      saveProfileSettings(remoteProfile);
-      setProfile(remoteProfile);
-      return;
-    }
-    if (!isDefaultProfileSettings(localProfile)) {
-      await writeCloudProfile(token, localProfile);
-    }
-  }
-
-  async function synchronize(token: string, localProducts: Product[], restoringSession = false) {
+  async function synchronize(token: string, localProducts: Product[]) {
     setCloudBusy(true);
     setCloudNotice("Synchronisation en cours…");
     setCloudNoticeError(false);
     try {
       const pendingTagsAtStart = loadPendingSyncTags();
       const identity = await verifyCloudSession(token);
-      if (Capacitor.isNativePlatform()) saveCloudToken(token);
       setCloudIdentity(identity);
       setCloudToken(token);
-      await synchronizeProfile(token);
-      const remoteProducts = (await listCloudProducts(token)).map(stripMediaPaths);
+      const remoteProducts = await listCloudProducts(token);
       const starterProducts = remoteProducts.filter(isStarterProduct);
       const userRemoteProducts = remoteProducts.filter((product) => !isStarterProduct(product));
       const deletedIds = loadDeletedProductIds();
@@ -930,7 +828,11 @@ export function App() {
       for (const local of localProducts) {
         if (deletedSet.has(local.id)) continue;
         const remote = remoteById.get(local.id);
-        if (!remote || Date.parse(local.updatedAt) > Date.parse(remote.updatedAt)) mergedById.set(local.id, local);
+        if (!remote || Date.parse(local.updatedAt) > Date.parse(remote.updatedAt)) {
+          mergedById.set(local.id, local);
+        } else {
+          mergedById.set(local.id, mergeProductVersions(local, remote));
+        }
       }
       const merged = [...mergedById.values()].sort((first, second) => Date.parse(second.updatedAt) - Date.parse(first.updatedAt));
       const initialMergedById = new Map(mergedById);
@@ -958,16 +860,22 @@ export function App() {
         const local = localById.get(product.id);
         const remote = remoteById.get(product.id);
         const pendingTag = pendingTagsAtStart[product.id];
+        const remoteEntryIds = new Set(remote?.entries.map((entry) => entry.id) ?? []);
+        const hasLocalOnlyEntries = local?.entries.some((entry) => !remoteEntryIds.has(entry.id)) ?? false;
         const shouldWrite = local !== undefined
-          && (!remote || Boolean(pendingTag) || Date.parse(local.updatedAt) > Date.parse(remote.updatedAt));
-        const saved = shouldWrite ? await writeCloudProduct(token, stripMediaPaths(product)) : product;
+          && (!remote || Boolean(pendingTag) || Date.parse(local.updatedAt) > Date.parse(remote.updatedAt) || hasLocalOnlyEntries);
+        const saved = shouldWrite ? await writeCloudProduct(token, product) : product;
         for (const entry of saved.entries) {
           if (!entry.mediaId || !shouldWrite) continue;
           const localBlob = await readMedia(entry.mediaId);
           if (localBlob) {
             await putCloudMedia(token, saved.id, entry.mediaId, localBlob);
-          } else if (!remote) {
-            throw new Error(`Fichier local introuvable : ${entry.fileName ?? entry.mediaId}`);
+          } else if (!remote || (local?.entries.some((localEntry) => localEntry.id === entry.id) && !remoteEntryIds.has(entry.id))) {
+            if (remote) {
+              await fetchCloudMedia(token, saved.id, entry.mediaId);
+            } else {
+              throw new Error(`Fichier local introuvable : ${entry.fileName ?? entry.mediaId}`);
+            }
           }
         }
         if (shouldWrite) {
@@ -997,43 +905,21 @@ export function App() {
       setCloudNotice(`Synchronisé avec ${identity.email ?? "Google"} · ${synchronizedProducts.length} création${synchronizedProducts.length === 1 ? "" : "s"}`);
       setCloudNoticeError(false);
     } catch (error) {
-      if (error instanceof CloudRequestError && error.status === 401) {
-        clearCloudToken();
-        setCloudToken("");
-        setCloudIdentity(null);
-      }
-      if (!restoringSession || !(error instanceof CloudRequestError && error.status === 401)) {
-        setCloudNotice(error instanceof Error ? error.message : "La synchronisation a échoué.");
-        setCloudNoticeError(true);
-      }
+      setCloudNotice(error instanceof Error ? error.message : "La synchronisation a échoué.");
+      setCloudNoticeError(true);
     } finally {
       setCloudBusy(false);
     }
   }
 
-  async function onGoogleLogin(credential?: string) {
+  function onGoogleLogin(credential?: string) {
     if (cloudBusy) return;
     if (!credential) {
       setCloudNotice("Google n'a pas renvoyé de jeton de connexion.");
       setCloudNoticeError(true);
       return;
     }
-    if (Capacitor.isNativePlatform()) {
-      void synchronize(credential, products);
-      return;
-    }
-    setCloudBusy(true);
-    setCloudNotice("Connexion en cours…");
-    setCloudNoticeError(false);
-    try {
-      await createCloudSession(credential);
-      setCloudToken(BROWSER_SESSION_TOKEN);
-      await synchronize(BROWSER_SESSION_TOKEN, products);
-    } catch (error) {
-      setCloudNotice(error instanceof Error ? error.message : "La connexion Google a échoué.");
-      setCloudNoticeError(true);
-      setCloudBusy(false);
-    }
+    void synchronize(credential, products);
   }
 
   async function signInNative() {
@@ -1062,23 +948,14 @@ export function App() {
         setCloudNoticeError(true);
         return;
       }
-    } else {
-      try {
-        await clearCloudSession();
-      } catch (error) {
-        setCloudNotice(error instanceof Error ? error.message : "La déconnexion a échoué.");
-        setCloudNoticeError(true);
-        return;
-      }
     }
-    clearCloudToken();
     setCloudToken("");
     setCloudIdentity(null);
     setCloudNotice("Déconnecté de Google ; les fiches locales restent disponibles.");
     setCloudNoticeError(false);
   }
 
-  if (!cloudToken && !cloudIdentity) {
+  if (!cloudToken) {
     return <LoginScreen
       busy={cloudBusy}
       notice={cloudNotice}
@@ -1106,30 +983,6 @@ export function App() {
       : product));
   }
 
-  async function deleteSelectedEntry(entry: WorkshopEntry): Promise<void> {
-    markProductsForSync([selectedId]);
-    setProducts((current) => current.map((product) => product.id === selectedId
-      ? removeCatalogEntry(product, entry.id)
-      : product));
-
-    const errors: string[] = [];
-    if (entry.mediaId) {
-      try {
-        await deleteMedia([entry.mediaId]);
-      } catch (error) {
-        errors.push(error instanceof Error ? error.message : "Impossible de supprimer le fichier de cet appareil.");
-      }
-      if (cloudToken) {
-        try {
-          await deleteCloudMedia(cloudToken, selectedId, entry.mediaId);
-        } catch (error) {
-          errors.push(error instanceof Error ? error.message : "Impossible de supprimer le fichier distant.");
-        }
-      }
-    }
-    if (errors.length) throw new Error(`Élément retiré du journal, mais le fichier n'a pas pu être supprimé partout : ${errors.join(" ")}`);
-  }
-
   function addNote(text: string, workDetails: EntryWorkDetails, index?: number) {
     markProductsForSync([selectedId]);
     setProducts((current) => current.map((product) => product.id === selectedId
@@ -1147,9 +1000,7 @@ export function App() {
   }
 
   async function uploadEntry(file: File, kind: "photo" | "file", index?: number) {
-    const isImage = kind === "photo" || file.type.startsWith("image/")
-      || /\.(avif|gif|heic|heif|jpe?g|png|webp)$/i.test(file.name);
-    const mediaFile = isImage ? await compressPhoto(file) : file;
+    const mediaFile = kind === "photo" ? await compressPhoto(file) : file;
     const mediaId = crypto.randomUUID();
     await storeMedia(mediaId, mediaFile);
     const newEntry: Omit<WorkshopEntry, "id" | "createdAt"> = {
@@ -1199,14 +1050,14 @@ export function App() {
     setAiStudioOpen(true);
   }
 
-  function handleAddSketchEntry(productId: string, mediaId: string, mimeType: string) {
-    const extension = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
+  function handleAddSketchEntry(productId: string, mediaId: string, dataUrl: string) {
     const newEntry: Omit<WorkshopEntry, "id" | "createdAt"> = {
       kind: "sketch",
       text: "Croquis d'atelier de référence (cotations & style crayon)",
       mediaId,
-      fileName: `croquis-atelier.${extension}`,
-      mimeType,
+      mediaPath: dataUrl,
+      fileName: "croquis-atelier.jpg",
+      mimeType: "image/jpeg",
     };
     markProductsForSync([productId]);
     setProducts((current) => current.map((p) => p.id === productId ? addEntry(p, newEntry) : p));
@@ -1335,7 +1186,6 @@ export function App() {
           onEntry={addNote}
           onEditEntry={editNote}
           onMoveEntry={moveSelectedEntry}
-          onDeleteEntry={deleteSelectedEntry}
           onUpload={uploadEntry}
           onDelete={removeSelected}
           onOpenAiStudio={(tab) => openAiStudio(tab, selected)}
@@ -1356,13 +1206,7 @@ export function App() {
       {profileOpen && (
         <ProfileModal
           settings={profile}
-          onSave={async (newSettings) => {
-            setProfile(newSettings);
-            markProfilePendingSync();
-            if (!cloudToken) return;
-            await writeCloudProfile(cloudToken, newSettings);
-            clearProfilePendingSync();
-          }}
+          onSave={(newSettings) => setProfile(newSettings)}
           onClose={() => setProfileOpen(false)}
         />
       )}

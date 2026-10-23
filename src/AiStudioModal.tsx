@@ -335,7 +335,7 @@ export function AiStudioModal({
                 Générez avec <strong>Gemini</strong> un croquis technique au crayon graphite à partir d'une photo d'atelier, avec fond texturé et les dimensions connues du projet.
               </div>
 
-              <div className="sketch-mode-toggle" style={{ marginBottom: "12px", fontSize: "11px", color: "#545d50" }}>
+              <div className="sketch-mode-toggle" style={{ marginBottom: "12px", fontSize: "13px", color: "#545d50" }}>
                 <span>Génération d'image par Gemini · clé API requise</span>
               </div>
 

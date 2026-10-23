@@ -4,4 +4,6 @@
     <string name="title_activity_main">MaxLab</string>
     <string name="package_name">com.maxpatissier.maxlab</string>
     <string name="custom_url_scheme">com.maxpatissier.maxlab</string>
+    <string name="shortcut_capture_photo_short">Prendre une photo</string>
+    <string name="shortcut_capture_photo_long">Ajouter une photo à la création en cours</string>
 </resources>

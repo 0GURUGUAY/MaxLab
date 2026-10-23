@@ -1,6 +1,7 @@
 import type { Product } from "./types";
 
 const PRODUCTS_KEY = "maxlab.products.v1";
+const ACTIVE_PRODUCT_KEY = "maxlab.active-product.v1";
 const DELETED_PRODUCTS_KEY = "maxlab.deleted-products.v1";
 const PENDING_SYNC_KEY = "maxlab.pending-sync.v1";
 const DATABASE = "maxlab-media";
@@ -42,6 +43,18 @@ export function hasStoredProducts(): boolean {
 
 export function saveProducts(products: Product[]): void {
   localStorage.setItem(PRODUCTS_KEY, JSON.stringify(products.map(stripMediaPaths)));
+}
+
+export function loadActiveProductId(): string {
+  return localStorage.getItem(ACTIVE_PRODUCT_KEY) ?? "";
+}
+
+export function saveActiveProductId(id: string): void {
+  localStorage.setItem(ACTIVE_PRODUCT_KEY, id);
+}
+
+export function clearActiveProductId(): void {
+  localStorage.removeItem(ACTIVE_PRODUCT_KEY);
 }
 
 export function loadPendingSyncTags(): PendingSyncTags {

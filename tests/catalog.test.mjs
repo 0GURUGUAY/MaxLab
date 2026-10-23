@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addEntry, collectEquipmentOptions, createProduct, formatDurationMinutes, insertEntry, isStarterProduct, moveEntry, removeEntry, summarizeEntryWork, updateNoteEntry } from "../src/catalog.ts";
+import { addEntry, collectEquipmentOptions, createProduct, formatDurationMinutes, insertEntry, isStarterProduct, mergeProductVersions, moveEntry, removeEntry, summarizeEntryWork, updateNoteEntry } from "../src/catalog.ts";
 
 test("createProduct trims the name and initializes workshop fields", () => {
   const product = createProduct({ name: "  Petite boîte  ", category: "bois" }, new Date("2026-10-12T12:00:00.000Z"));
@@ -51,6 +51,59 @@ test("moveEntry reorders a journal event without mutating the original product",
   assert.equal(updated.updatedAt, "2026-10-13T00:00:00.000Z");
   assert.deepEqual(product.entries.map((entry) => entry.id), ["first", "second", "third"]);
   assert.equal(moveEntry(product, 0, 3), product);
+});
+
+test("mergeProductVersions keeps newer remote fields and local-only entries", () => {
+  const local = createProduct({
+    id: "product-1",
+    name: "Atelier",
+    category: "bois",
+    updatedAt: "2026-10-10T00:00:00.000Z",
+    entries: [
+      { id: "photo-1", kind: "photo", text: "", mediaId: "media-1", createdAt: "2026-10-09T00:00:00.000Z" },
+      { id: "note-1", kind: "note", text: "Ancienne note", createdAt: "2026-10-08T00:00:00.000Z" },
+    ],
+  });
+  const remote = createProduct({
+    id: "product-1",
+    name: "Atelier modifié",
+    category: "bois",
+    updatedAt: "2026-10-12T00:00:00.000Z",
+    entries: [{ id: "note-1", kind: "note", text: "Note mise à jour", createdAt: "2026-10-08T00:00:00.000Z" }],
+  });
+
+  const merged = mergeProductVersions(local, remote);
+
+  assert.equal(merged.name, "Atelier modifié");
+  assert.deepEqual(merged.entries.map((entry) => entry.id), ["photo-1", "note-1"]);
+  assert.equal(merged.entries[1].text, "Note mise à jour");
+  assert.equal(merged.entries[0].mediaId, "media-1");
+});
+
+test("mergeProductVersions keeps remote-only entries when local fields are newer", () => {
+  const local = {
+    ...createProduct({
+    id: "product-1",
+    name: "Atelier modifié",
+    category: "bois",
+    entries: [{ id: "photo-1", kind: "photo", text: "", mediaId: "media-1", createdAt: "2026-10-10T00:00:00.000Z" }],
+    }),
+    updatedAt: "2026-10-12T00:00:00.000Z",
+  };
+  const remote = {
+    ...createProduct({
+    id: "product-1",
+    name: "Atelier",
+    category: "bois",
+    entries: [{ id: "note-1", kind: "note", text: "Note cloud", createdAt: "2026-10-11T00:00:00.000Z" }],
+    }),
+    updatedAt: "2026-10-10T00:00:00.000Z",
+  };
+
+  const merged = mergeProductVersions(local, remote);
+
+  assert.equal(merged.name, "Atelier modifié");
+  assert.deepEqual(merged.entries.map((entry) => entry.id), ["note-1", "photo-1"]);
 });
 
 test("removeEntry removes a journal event without mutating the original product", () => {
